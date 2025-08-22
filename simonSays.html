@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Simon Game – Simple</title>
+  <style>
+    :root {
+      --gap: 14px;
+      --size: 140px;
+      --radius: 18px;
+      --shadow: 0 10px 25px rgba(0,0,0,.15);
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji';
+      margin: 0; padding: 32px; background: #0f172a; color: #e2e8f0;
+      display: grid; place-items: center; min-height: 100vh;
+    }
+    .card {
+      width: min(480px, 92vw);
+      background: #0b1220;
+      border: 1px solid #1f2937; border-radius: 24px; padding: 22px; box-shadow: var(--shadow);
+    }
+    .header {
+      display:flex; align-items:center; justify-content:space-between; gap: 12px; margin-bottom: 16px;
+    }
+    h1 { font-size: 20px; margin: 0; font-weight: 700; letter-spacing: .3px; }
+    .level { font-variant-numeric: tabular-nums; background:#111827; border:1px solid #1f2937; padding:6px 10px; border-radius:12px; }
+    .grid {
+      display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--gap);
+      margin: 14px 0 18px;
+    }
+    .pad {
+      width: var(--size); height: var(--size); border-radius: var(--radius);
+      outline: none; border: none; cursor: pointer; box-shadow: inset 0 -8px 0 rgba(0,0,0,.15), 0 6px 16px rgba(0,0,0,.25);
+      transition: transform .05s ease, filter .15s ease, box-shadow .15s ease;
+      position: relative; overflow: hidden;
+    }
+    .pad:active { transform: translateY(2px) scale(.99); }
+
+    /* Colors */
+    .green { background: linear-gradient(180deg, #34d399, #059669); }
+    .red { background: linear-gradient(180deg, #f87171, #ef4444); }
+    .yellow { background: linear-gradient(180deg, #facc15, #eab308); }
+    .blue { background: linear-gradient(180deg, #60a5fa, #3b82f6); }
+
+    /* Flash / active effect */
+    .active { filter: brightness(1.7) saturate(1.2); box-shadow: inset 0 -4px 0 rgba(0,0,0,.08), 0 0 24px rgba(255,255,255,.25); }
+
+    .controls { display:flex; align-items:center; gap:10px; }
+    .btn {
+      background: #111827; color:#e5e7eb; border:1px solid #334155; padding:10px 14px; border-radius:12px; cursor:pointer; font-weight:600;
+      transition: transform .04s ease, background .15s ease, border-color .15s ease;
+    }
+    .btn:hover { background:#0f172a; border-color:#475569; }
+    .btn:active { transform: translateY(1px); }
+
+    .status { min-height: 22px; opacity:.95; }
+    .ok { color:#34d399; }
+    .bad { color:#f87171; }
+    .hint { color:#a1a1aa; font-size: 13px; margin-top: 6px; }
+
+    @media (max-width: 420px) {
+      :root { --size: 120px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h1>Simon Game</h1>
+      <div class="level">लेवल: <span id="level">0</span></div>
+    </div>
+
+    <div class="grid" aria-label="Simon pads">
+      <button class="pad green" id="green" aria-label="Green"></button>
+      <button class="pad red" id="red" aria-label="Red"></button>
+      <button class="pad yellow" id="yellow" aria-label="Yellow"></button>
+      <button class="pad blue" id="blue" aria-label="Blue"></button>
+    </div>
+
+    <div class="controls">
+      <button id="start" class="btn">Start / Restart</button>
+      <button id="strict" class="btn" title="गलती पर तुरंत Game Over">Strict: <span id="strictState">OFF</span></button>
+    </div>
+
+    <div class="status" id="status"></div>
+    <div class="hint">🔊 आवाज़ ऑन रखें। पहले sequence देखें, फिर उसी क्रम में टैप करें।</div>
+  </div>
+
+  <script>
+    // ==== Simple Simon Game (Hindi comments) ====
+    const colors = ["green", "red", "yellow", "blue"];
+    const pads = Object.fromEntries(colors.map(c => [c, document.getElementById(c)]));
+    const levelEl = document.getElementById('level');
+    const statusEl = document.getElementById('status');
+    const startBtn = document.getElementById('start');
+    const strictBtn = document.getElementById('strict');
+    const strictState = document.getElementById('strictState');
+
+    let sequence = [];      // गेम की master sequence
+    let userIndex = 0;      // यूज़र अभी किस स्टेप पर है
+    let level = 0;          // करंट लेवल
+    let acceptingInput = false; // क्या यूज़र इनपुट मान्य है?
+    let strictMode = false; // strict mode
+
+    // ---- Audio (WebAudio) ----
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const actx = new AudioCtx();
+    const freqs = { green: 329.63, red: 261.63, yellow: 220.00, blue: 164.81 };
+
+    function beep(color, duration = 360) {
+      const o = actx.createOscillator();
+      const g = actx.createGain();
+      o.type = 'sine';
+      o.frequency.value = freqs[color] || 300;
+      o.connect(g);
+      g.connect(actx.destination);
+      g.gain.setValueAtTime(0.0001, actx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.3, actx.currentTime + 0.02);
+      o.start();
+      setTimeout(() => {
+        g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + 0.02);
+        setTimeout(() => { o.stop(); o.disconnect(); g.disconnect(); }, 40);
+      }, duration);
+    }
+
+    function flash(color, t = 380) {
+      pads[color].classList.add('active');
+      beep(color, t - 20);
+      return new Promise(res => setTimeout(() => { pads[color].classList.remove('active'); res(); }, t));
+    }
+
+    // sequence को एक–एक करके चलाएँ
+    async function playSequence() {
+      acceptingInput = false;
+      statusEl.textContent = 'देखें…';
+      let wait = 360; // speed बेस
+      for (let i = 0; i < sequence.length; i++) {
+        // थोड़ा dynamic speed: जैसे-जैसे लंबा होता जाए, थोड़ा फास्ट
+        if (i > 6) wait = 320; if (i > 12) wait = 280; if (i > 18) wait = 240;
+        await sleep(200);
+        await flash(sequence[i], wait);
+      }
+      statusEl.textContent = 'अब आपकी बारी';
+      acceptingInput = true;
+      userIndex = 0;
+    }
+
+    function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
+    function nextStep() {
+      // नया रंग add करें
+      const next = colors[Math.floor(Math.random() * colors.length)];
+      sequence.push(next);
+      level++;
+      levelEl.textContent = level;
+      playSequence();
+    }
+
+    async function handleUser(color) {
+      if (!acceptingInput) return; // अभी input लॉक है
+      // यूजर का visual + आवाज
+      pads[color].classList.add('active');
+      beep(color, 200);
+      setTimeout(() => pads[color].classList.remove('active'), 140);
+
+      // सही/गलत जाँचें
+      if (color === sequence[userIndex]) {
+        userIndex++;
+        // पूरा level match हो गया
+        if (userIndex === sequence.length) {
+          acceptingInput = false;
+          statusEl.textContent = 'शाबाश! अगला लेवल…';
+          await sleep(600);
+          nextStep();
+        }
+      } else {
+        // गलत
+        await wrongBuzz();
+        if (strictMode) {
+          // strict में तुरंत restart
+          startGame();
+        } else {
+          statusEl.textContent = 'गलत! sequence फिर से देखें।';
+          await sleep(600);
+          playSequence();
+        }
+      }
+    }
+
+    async function wrongBuzz(){
+      statusEl.textContent = 'गलत चाल!';
+      // छोटा error tone
+      const o = actx.createOscillator();
+      const g = actx.createGain();
+      o.type = 'square'; o.frequency.value = 110; o.connect(g); g.connect(actx.destination);
+      g.gain.setValueAtTime(0.0001, actx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.4, actx.currentTime + 0.02);
+      o.start();
+      document.body.style.filter = 'grayscale(1) brightness(.8)';
+      await sleep(380);
+      document.body.style.filter = '';
+      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + 0.03);
+      await sleep(60);
+      o.stop(); o.disconnect(); g.disconnect();
+    }
+
+    function startGame(){
+      sequence = [];
+      userIndex = 0;
+      level = 0;
+      levelEl.textContent = level;
+      statusEl.textContent = 'नया गेम शुरू!';
+      // iOS autoplay fix: resume audio
+      if (actx.state === 'suspended') actx.resume();
+      setTimeout(nextStep, 400);
+    }
+
+    // ---- Events ----
+    colors.forEach(c => pads[c].addEventListener('click', () => handleUser(c)));
+    startBtn.addEventListener('click', startGame);
+
+    strictBtn.addEventListener('click', () => {
+      strictMode = !strictMode;
+      strictState.textContent = strictMode ? 'ON' : 'OFF';
+      strictBtn.style.borderColor = strictMode ? '#f87171' : '#334155';
+    });
+
+    // Keyboard support (WASD)
+    const keyMap = { KeyW: 'green', KeyA: 'red', KeyS: 'yellow', KeyD: 'blue' };
+    window.addEventListener('keydown', e => {
+      const c = keyMap[e.code];
+      if (c) handleUser(c);
+    });
+  </script>
+</body>
+</html>
